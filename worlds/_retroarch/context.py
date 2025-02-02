@@ -12,9 +12,9 @@ from CommonClient import CommonContext, ClientCommandProcessor, get_base_parser,
 import Patch
 import Utils
 
-from . import BizHawkContext, ConnectionStatus, NotConnectedError, RequestFailedError, connect, disconnect, get_hash, \
+from . import RetroArchContext, ConnectionStatus, NotConnectedError, RequestFailedError, connect, disconnect, get_hash, \
     get_script_version, get_system, ping
-from .client import BizHawkClient, AutoBizHawkClientRegister
+from .client import RetroArchClient, AutoRetroArchClientRegister
 
 
 EXPECTED_SCRIPT_VERSION = 1
@@ -27,26 +27,26 @@ class AuthStatus(enum.IntEnum):
     AUTHENTICATED = 3
 
 
-class BizHawkClientCommandProcessor(ClientCommandProcessor):
+class RetroArchClientCommandProcessor(ClientCommandProcessor):
     def _cmd_bh(self):
-        """Shows the current status of the client's connection to BizHawk"""
-        if isinstance(self.ctx, BizHawkClientContext):
-            if self.ctx.bizhawk_ctx.connection_status == ConnectionStatus.NOT_CONNECTED:
-                logger.info("BizHawk Connection Status: Not Connected")
-            elif self.ctx.bizhawk_ctx.connection_status == ConnectionStatus.TENTATIVE:
-                logger.info("BizHawk Connection Status: Tentatively Connected")
-            elif self.ctx.bizhawk_ctx.connection_status == ConnectionStatus.CONNECTED:
-                logger.info("BizHawk Connection Status: Connected")
+        """Shows the current status of the client's connection to RetroArch"""
+        if isinstance(self.ctx, RetroArchClientContext):
+            if self.ctx.retroarch_ctx.connection_status == ConnectionStatus.NOT_CONNECTED:
+                logger.info("RetroArch Connection Status: Not Connected")
+            elif self.ctx.retroarch_ctx.connection_status == ConnectionStatus.TENTATIVE:
+                logger.info("RetroArch Connection Status: Tentatively Connected")
+            elif self.ctx.retroarch_ctx.connection_status == ConnectionStatus.CONNECTED:
+                logger.info("RetroArch Connection Status: Connected")
 
 
-class BizHawkClientContext(CommonContext):
-    command_processor = BizHawkClientCommandProcessor
+class RetroArchClientContext(CommonContext):
+    command_processor = RetroArchClientCommandProcessor
     auth_status: AuthStatus
     password_requested: bool
-    client_handler: BizHawkClient | None
+    client_handler: RetroArchClient | None
     slot_data: dict[str, Any] | None = None
     rom_hash: str | None = None
-    bizhawk_ctx: BizHawkContext
+    retroarch_ctx: RetroArchContext
 
     watcher_timeout: float
     """The maximum amount of time the game watcher loop will wait for an update from the server before executing"""
@@ -56,12 +56,12 @@ class BizHawkClientContext(CommonContext):
         self.auth_status = AuthStatus.NOT_AUTHENTICATED
         self.password_requested = False
         self.client_handler = None
-        self.bizhawk_ctx = BizHawkContext()
+        self.retroarch_ctx = RetroArchContext()
         self.watcher_timeout = 0.5
 
     def make_gui(self):
         ui = super().make_gui()
-        ui.base_title = "Archipelago BizHawk Client"
+        ui.base_title = "Archipelago RetroArch Client"
         return ui
 
     def on_package(self, cmd, args):
@@ -75,8 +75,8 @@ class BizHawkClientContext(CommonContext):
     async def server_auth(self, password_requested: bool=False):
         self.password_requested = password_requested
 
-        if self.bizhawk_ctx.connection_status != ConnectionStatus.CONNECTED:
-            logger.info("Awaiting connection to BizHawk before authenticating")
+        if self.retroarch_ctx.connection_status != ConnectionStatus.CONNECTED:
+            logger.info("Awaiting connection to RetroArch before authenticating")
             return
 
         if self.client_handler is None:
@@ -93,7 +93,7 @@ class BizHawkClientContext(CommonContext):
 
         if password_requested and not self.password:
             self.auth_status = AuthStatus.NEED_INFO
-            await super(BizHawkClientContext, self).server_auth(password_requested)
+            await super(RetroArchClientContext, self).server_auth(password_requested)
 
         await self.send_connect()
         self.auth_status = AuthStatus.PENDING
@@ -103,7 +103,7 @@ class BizHawkClientContext(CommonContext):
         await super().disconnect(allow_autoreconnect)
 
 
-async def _game_watcher(ctx: BizHawkClientContext):
+async def _game_watcher(ctx: RetroArchClientContext):
     showed_connecting_message = False
     showed_connected_message = False
     showed_no_handler_message = False
@@ -117,16 +117,16 @@ async def _game_watcher(ctx: BizHawkClientContext):
         ctx.watcher_event.clear()
 
         try:
-            if ctx.bizhawk_ctx.connection_status == ConnectionStatus.NOT_CONNECTED:
+            if ctx.retroarch_ctx.connection_status == ConnectionStatus.NOT_CONNECTED:
                 showed_connected_message = False
 
                 if not showed_connecting_message:
-                    logger.info("Waiting to connect to BizHawk...")
+                    logger.info("Waiting to connect to RetroArch...")
                     showed_connecting_message = True
 
                 # Since a call to `connect` can take a while to return, this will cancel connecting
                 # if the user has decided to close the client.
-                connect_task = asyncio.create_task(connect(ctx.bizhawk_ctx), name="BizHawkConnect")
+                connect_task = asyncio.create_task(connect(ctx.retroarch_ctx), name="RetroArchConnect")
                 exit_task = asyncio.create_task(ctx.exit_event.wait(), name="ExitWait")
                 await asyncio.wait([connect_task, exit_task], return_when=asyncio.FIRST_COMPLETED)
 
@@ -140,23 +140,23 @@ async def _game_watcher(ctx: BizHawkClientContext):
 
                 showed_no_handler_message = False
 
-                script_version = await get_script_version(ctx.bizhawk_ctx)
+                script_version = await get_script_version(ctx.retroarch_ctx)
 
                 if script_version != EXPECTED_SCRIPT_VERSION:
                     logger.info(f"Connector script is incompatible. Expected version {EXPECTED_SCRIPT_VERSION} but "
                                 f"got {script_version}. Disconnecting.")
-                    disconnect(ctx.bizhawk_ctx)
+                    disconnect(ctx.retroarch_ctx)
                     continue
 
             showed_connecting_message = False
 
-            await ping(ctx.bizhawk_ctx)
+            await ping(ctx.retroarch_ctx)
 
             if not showed_connected_message:
                 showed_connected_message = True
-                logger.info("Connected to BizHawk")
+                logger.info("Connected to RetroArch")
 
-            rom_hash = await get_hash(ctx.bizhawk_ctx)
+            rom_hash = await get_hash(ctx.retroarch_ctx)
             if ctx.rom_hash is not None and ctx.rom_hash != rom_hash:
                 if ctx.server is not None and not ctx.server.socket.closed:
                     logger.info(f"ROM changed. Disconnecting from server.")
@@ -169,8 +169,8 @@ async def _game_watcher(ctx: BizHawkClientContext):
             ctx.rom_hash = rom_hash
 
             if ctx.client_handler is None:
-                system = await get_system(ctx.bizhawk_ctx)
-                ctx.client_handler = await AutoBizHawkClientRegister.get_handler(ctx, system)
+                system = await get_system(ctx.retroarch_ctx)
+                ctx.client_handler = await AutoRetroArchClientRegister.get_handler(ctx, system)
 
                 if ctx.client_handler is None:
                     if not showed_no_handler_message:
@@ -183,7 +183,7 @@ async def _game_watcher(ctx: BizHawkClientContext):
                     logger.info(f"Running handler for {ctx.client_handler.game}")
 
         except RequestFailedError as exc:
-            logger.info(f"Lost connection to BizHawk: {exc.args[0]}")
+            logger.info(f"Lost connection to RetroArch: {exc.args[0]}")
             continue
         except NotConnectedError:
             continue
@@ -204,11 +204,11 @@ async def _run_game(rom: str):
     auto_start = Utils.get_settings().retroarchclient_options.rom_start
 
     if auto_start is True:
-        emuhawk_path = Utils.get_settings().retroarchclient_options.emuhawk_path
+        reetroarch_path = Utils.get_settings().retroarchclient_options.retroarch_path
         subprocess.Popen(
             [
-                emuhawk_path,
-                f"--lua={Utils.local_path('data', 'lua', 'connector_bizhawk_generic.lua')}",
+                retroarch_path,
+                f"--lua={Utils.local_path('data', 'lua', 'connector_retroarch_generic.lua')}",
                 os.path.realpath(rom),
             ],
             cwd=Utils.local_path("."),
@@ -252,7 +252,7 @@ def launch(*launch_args: str) -> None:
             if "server" in metadata:
                 args.connect = metadata["server"]
 
-        ctx = BizHawkClientContext(args.connect, args.password)
+        ctx = RetroArchClientContext(args.connect, args.password)
         ctx.server_task = asyncio.create_task(server_loop(ctx), name="ServerLoop")
 
         if gui_enabled:
@@ -269,7 +269,7 @@ def launch(*launch_args: str) -> None:
         await ctx.exit_event.wait()
         await ctx.shutdown()
 
-    Utils.init_logging("BizHawkClient", exception_logger="Client")
+    Utils.init_logging("RetroArchClient", exception_logger="Client")
     import colorama
     colorama.init()
     asyncio.run(main())
